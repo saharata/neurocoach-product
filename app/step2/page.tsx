@@ -10,6 +10,10 @@ type Mode = "PRE_INVESTIGATION" | "POST_INVESTIGATION";
 type Tone = "ATTENDING" | "TEACHING" | "NEUTRAL";
 type Verbosity = "SHORT" | "STANDARD" | "DEEP";
 
+function isValidEmail(s: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
 export default function Step2Page() {
   const [mode, setMode] = useState<Mode>("PRE_INVESTIGATION");
   const [tone, setTone] = useState<Tone>("ATTENDING");
@@ -45,6 +49,7 @@ export default function Step2Page() {
     },
   });
 
+  // NOTE: Step2 เดิมใช้เป็น array; เก็บไว้เหมือนเดิมเพื่อไม่กระทบ component อื่น
   const [investigations, setInvestigations] = useState({
     imaging: [] as string[],
     eeg: [] as string[],
@@ -78,6 +83,24 @@ export default function Step2Page() {
   // ✅ toggle: เริ่ม voice หลัง generate เท่านั้น
   const [autoVoiceAfterGenerate, setAutoVoiceAfterGenerate] = useState(true);
 
+  // -------------------------
+  // ✅ Step4 Context Saver (minimal change)
+  // -------------------------
+  function saveStep4Context(latestOut: any) {
+    try {
+      const payload = {
+        clinical: { problemRepresentation, history, exam },
+        ai: {
+          discussion: latestOut?.discussion ?? null,
+          attending: latestOut?.attending ?? null,
+          ddxByCategory: latestOut?.ddxByCategory ?? null,
+        },
+        ts: new Date().toISOString(),
+      };
+      sessionStorage.setItem("step4_context", JSON.stringify(payload));
+    } catch {}
+  }
+
   // ✅ Apply Step1 → fill Step2 state immediately
   function applyPrefill(prefill: any) {
     if (typeof prefill?.problem_representation === "string") {
@@ -91,7 +114,9 @@ export default function Step2Page() {
         neuro: { ...prev.neuro, ...(prefill.exam.neuro || {}) },
       }));
     }
+    // reset output to avoid mixing cases
     setOut(null);
+    setStep3Msg("");
   }
 
   const requestBody = useMemo(
@@ -153,9 +178,7 @@ export default function Step2Page() {
       if (v == null) return "";
       if (typeof v === "string") return v;
       if (Array.isArray(v)) {
-        return v
-          .map((x) => (typeof x === "string" ? x : JSON.stringify(x)))
-          .join("\n");
+        return v.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("\n");
       }
       if (typeof v === "object") return JSON.stringify(v, null, 2);
       return String(v);
@@ -169,7 +192,6 @@ export default function Step2Page() {
       return "";
     };
 
-    // ✅ block1: short note / localization only
     const block1 = pick(
       latestOut?.discussion?.shortNote,
       latestOut?.discussion?.short_note,
@@ -184,7 +206,6 @@ export default function Step2Page() {
       latestOut?.localization
     );
 
-    // ✅ block2: shortlist / short summary only
     const block2 = pick(
       latestOut?.discussion?.shortlist,
       latestOut?.discussion?.dxShortlist,
@@ -279,7 +300,9 @@ ${safeBlock2}
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const model = "gpt-4o-realtime-preview";
+      // ✅ configurable + safe default (avoid deprecated preview model)
+      const model = process.env.NEXT_PUBLIC_REALTIME_MODEL || "gpt-realtime";
+
       const sdpResp = await fetch(
         `https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
         {
@@ -306,6 +329,7 @@ ${safeBlock2}
   async function generate() {
     setLoading(true);
     setOut(null);
+    setStep3Msg("");
 
     try {
       const resp = await fetch("/api/discuss", {
@@ -318,6 +342,9 @@ ${safeBlock2}
       if (!resp.ok) throw new Error(data?.error || "Request failed");
 
       setOut(data);
+
+      // ✅ always save context for Step4 (minimal + robust)
+      saveStep4Context(data);
 
       if (autoVoiceAfterGenerate) {
         stopVoice();
@@ -340,6 +367,7 @@ ${safeBlock2}
     try {
       const email = consultEmail.trim();
       if (!email) throw new Error("กรุณากรอกอีเมลผู้คอนเซ้าท์ก่อน");
+      if (!isValidEmail(email)) throw new Error("รูปแบบอีเมลไม่ถูกต้อง");
       if (!out || out?.error) throw new Error("ยังไม่มีผลลัพธ์จาก Generate discussion");
 
       const payload = {
@@ -379,6 +407,8 @@ ${safeBlock2}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const canGoStep4 = !!out && !out?.error;
+
   return (
     <div className="container">
       <Step1Bar onApplyPrefill={applyPrefill} />
@@ -407,6 +437,7 @@ ${safeBlock2}
         </div>
       </div>
 
+      {/* Voice */}
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="btnbar" style={{ alignItems: "center", gap: 10 }}>
           <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -463,13 +494,33 @@ ${safeBlock2}
           <div className="card">
             <h3>Run</h3>
 
-            <div className="btnbar">
+            <div className="btnbar" style={{ gap: 10, flexWrap: "wrap" }}>
               <button onClick={generate} disabled={loading}>
                 {loading ? "Generating..." : "Generate discussion"}
               </button>
-              <button onClick={() => setOut(null)} disabled={loading}>
+
+              <button
+                onClick={() => {
+                  setOut(null);
+                  setStep3Msg("");
+                }}
+                disabled={loading}
+              >
                 Clear output
               </button>
+
+              <button
+                onClick={() => {
+                  if (!canGoStep4) return;
+                  // ensure latest context saved
+                  saveStep4Context(out);
+                  window.location.href = "/step4";
+                }}
+                disabled={!canGoStep4 || loading}
+              >
+                ไป Step 4 (Final Dx)
+              </button>
+
               <span className="pill">Model: {process.env.NEXT_PUBLIC_MODEL_HINT || "server env"}</span>
             </div>
 
@@ -495,7 +546,7 @@ ${safeBlock2}
               <div className="btnbar" style={{ gap: 10 }}>
                 <button
                   onClick={submitStep3}
-                  disabled={step3Loading || !consultEmail.trim() || !out || !!out?.error}
+                  disabled={step3Loading || !consultEmail.trim() || !isValidEmail(consultEmail.trim()) || !out || !!out?.error}
                 >
                   {step3Loading ? "Submitting..." : "Submit Step 3 (Email + Sheet)"}
                 </button>

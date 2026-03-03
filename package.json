@@ -2,6 +2,9 @@
   "name": "neurocoach",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
@@ -17,7 +20,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "25.3.2",
+    "@types/node": "20.14.10",
     "@types/react": "19.2.14",
     "typescript": "5.9.3"
   }
